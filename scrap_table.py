@@ -5,65 +5,36 @@ import uuid
 
 def lambda_handler(event, context):
     # URL de la página web que contiene la tabla
-    url = "https://ultimosismo.igp.gob.pe/productos/reportes-sismicos"
+    url = "https://ultimosismo.igp.gob.pe/api/ultimo-sismo/ajaxb/2026"
 
     # Me lo recomendo porque me bloqueaban
     headers_req = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     }
 
-    # Realizar la solicitud HTTP a la página web
-    response = requests.get(url, headers=headers_req)
-    if response.status_code != 200:
+    # Mejor hago un try except
+    try:
+        response = requests.get(url, headers=headers_req)
+        response.raise_for_status()
+        sismos_json = response.json()
+    except Exception as e:
         return {
-            'statusCode': response.status_code,
-            'body': 'Error al acceder a la página web del IGP'
+            'statusCode': 500,
+            'body': f'Sigue sin funcionar con su API interna: {str(e)}'
         }
 
-    # Parsear el contenido HTML de la página web
-    soup = BeautifulSoup(response.content, 'html.parser')
+    ultimos_10_crudos = sismos_json[-10:][::-1]
 
-    # Encontrar la tabla en el HTML
-    table = soup.find('table')
-    if not table:
-        return {
-            'statusCode': 404,
-            'body': 'No se encontró la tabla en la página web'
-        }
-
-    # Extraer los encabezados de la tabla
-    thead = table.find('thead')
-    if thead:
-        headers = [header.text.strip() for header in thead.find_all('th')]
-    else:
-        # Encabezados por porque algunos no agarra el thead
-        headers = ['#', 'Cod reporte', 'Referencia', 'Magnitud', 'Fecha y hora', 'Accion']
-
-    # Agarro los 10 ultimos sismos
     rows = []
-    tbody = table.find('tbody')
-    
-    # El parser no encuentra el tbody así que itero por tr
-    filas_html = tbody.find_all('tr') if tbody else table.find_all('tr')[1:]
-    
-    # Tomamos solo las primeras 10
-    for row in filas_html[:10]:
-        cells = row.find_all('td')
-        if cells:
-            row_data = {}
-            row_data['id'] = str(uuid.uuid4())
-            
-            for i, cell in enumerate(cells):
-                key = headers[i] if i < len(headers) else f'Columna_{i}'
-                row_data[key] = cell.text.strip()
-            
-            rows.append(row_data)
-
-    if len(rows) == 0:
-        return {
-            'statusCode': 404,
-            'body': 'Se encontró la tabla, pero estaba vacía (sin etiquetas <td>).'
-        }
+    for sismo in ultimos_10_crudos:
+        # Las llaves que vi en Vista Previa las copio aqui
+        rows.append({
+            'id': str(uuid.uuid4()),
+            'Cod reporte': sismo.get('codigo', ''),
+            'Referencia': sismo.get('referencia', ''),
+            'Magnitud': str(sismo.get('magnitud', '')),
+            'Fecha y hora': sismo.get('fecha_local', '')
+        })
 
     # Guardo los datos en DynamoDB
     dynamodb = boto3.resource('dynamodb')
