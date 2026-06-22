@@ -5,7 +5,7 @@ import uuid
 
 def lambda_handler(event, context):
     # URL de la página web que contiene la tabla
-    url = "https://sgonorte.bomberosperu.gob.pe/24horas/?criterio=/"
+    url = "https://ultimosismo.igp.gob.pe/productos/reportes-sismicos"
 
     # Realizar la solicitud HTTP a la página web
     response = requests.get(url)
@@ -19,7 +19,7 @@ def lambda_handler(event, context):
     soup = BeautifulSoup(response.content, 'html.parser')
 
     # Encontrar la tabla en el HTML
-    table = soup.find('table')
+    table = soup.find('table', class_='w-full border-collapse')
     if not table:
         return {
             'statusCode': 404,
@@ -27,21 +27,36 @@ def lambda_handler(event, context):
         }
 
     # Extraer los encabezados de la tabla
-    headers = [header.text for header in table.find_all('th')]
+    thead = table.find('thead')
+    if thead:
+        headers = [header.text.strip() for header in thead.find_all('th')]
+    else:
+        # Encabezados por porque algunos no agarra el thead
+        headers = ['#', 'Cod reporte', 'Referencia', 'Magnitud', 'Fecha y hora', 'Accion']
 
-    # Extraer las filas de la tabla
+    # Agarro los 10 ultimos sismos
+    tbody = table.find('tbody')
     rows = []
-    for row in table.find_all('tr')[1:]:  # Omitir el encabezado
-        cells = row.find_all('td')
-        rows.append({headers[i+1]: cell.text for i, cell in enumerate(cells)})
+    
+    if tbody:
+        for row in tbody.find_all('tr')[:10]:
+            cells = row.find_all('td')
+            if cells:
+                row_data = {}
+                row_data['id'] = str(uuid.uuid4())
+                
+                for i, cell in enumerate(cells):
+                    key = headers[i] if i < len(headers) else f'Columna_{i}'
+                    row_data[key] = cell.text.strip()
+                
+                rows.append(row_data)
 
-    # Guardar los datos en DynamoDB
+    # Guardo los datos en DynamoDB
     dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table('TablaWebScrapping')
+    dynamo_table = dynamodb.Table('TablaWebScrapping')
 
-    # Eliminar todos los elementos de la tabla antes de agregar los nuevos
-    scan = table.scan()
-    with table.batch_writer() as batch:
+    scan = dynamo_table.scan()
+    with dynamo_table.batch_writer() as batch:
         for each in scan['Items']:
             batch.delete_item(
                 Key={
@@ -49,13 +64,8 @@ def lambda_handler(event, context):
                 }
             )
 
-    # Insertar los nuevos datos
-    i = 1
-    for row in rows:
-        row['#'] = i
-        row['id'] = str(uuid.uuid4())  # Generar un ID único para cada entrada
-        table.put_item(Item=row)
-        i = i + 1
+    for r in rows:
+        dynamo_table.put_item(Item=r)
 
     # Retornar el resultado como JSON
     return {
